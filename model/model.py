@@ -187,7 +187,7 @@ class PPO:
       
       for batch in loop:
         states = T.tensor(state_arr[batch], dtype=T.float32).to(self.actor.device)
-        old_props = T.tensor(old_probs_arr[batch]).to(self.actor.device)
+        old_probs = T.tensor(old_probs_arr[batch]).to(self.actor.device)
         actions = T.tensor(action_arr[batch]).to(self.actor.device)
 
         dist = self.actor(states)
@@ -195,4 +195,27 @@ class PPO:
 
         critic_value = T.squeeze(critic_value)
 
-        loop.set_postfix(epoch=epoch)
+        new_probs = dist.log_prob(actions)
+        prob_ratio = new_probs.exp() / old_probs.exp()
+
+        weighted_probs = advantage[batch] * prob_ratio
+        weighted_cliped_probs = T.clamp(prob_ratio, 1-self.policy_clip, 1+self.policy_clip) * advantage[batch]
+
+        actor_loss = -T.min(weighted_probs, weighted_cliped_probs).mean()
+
+        returns = advantage[batch] + values[batch]
+        critic_loss = (returns-critic_value) ** 2
+        critic_loss = critic_loss.mean()
+
+        total_loss = actor_loss + 0.5*critic_loss
+        self.actor.optimizer.zero_grad()
+        self.critic.optimizer.zero_grad()
+
+        total_loss.backward()
+
+        self.actor.optimizer.step()
+        self.critic.optimizer.step()
+
+        loop.set_postfix(epoch=epoch, actor_loss=actor_loss, critic_loss=critic_loss, total_loss=total_loss)
+        
+    self.memory.clear_memory()
